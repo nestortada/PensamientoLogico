@@ -1,0 +1,770 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mapa con Dijkstra</title>
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+  >
+  <style>
+    :root {
+      --primary: #0d6efd;
+      --surface: #ffffff;
+      --accent: #ff7a1a;
+      --border: #e0e0e0;
+      --text: #1f2937;
+      --muted: #6b7280;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html, body {
+      height: 100%;
+      margin: 0;
+      font-family: "Segoe UI", Arial, sans-serif;
+      color: var(--text);
+    }
+
+    #map {
+      height: 100vh;
+      width: 100%;
+    }
+
+    #info {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      width: 320px;
+      background: rgba(255, 255, 255, 0.95);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px;
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+      z-index: 1000;
+      backdrop-filter: blur(4px);
+    }
+
+    #info h1 {
+      margin: 0 0 8px;
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--primary);
+    }
+
+    #info .row {
+      margin-bottom: 6px;
+    }
+
+    #info .label {
+      font-weight: 600;
+    }
+
+    #info .muted {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    #route-list {
+      margin: 6px 0;
+      padding: 8px;
+      background: #f9fafb;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      min-height: 44px;
+      font-size: 14px;
+      line-height: 1.4;
+    }
+
+    #controls {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 8px;
+      margin: 10px 0;
+    }
+
+    select, button {
+      width: 100%;
+      padding: 8px 10px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 14px;
+      background: #fff;
+      color: var(--text);
+    }
+
+    button {
+      background: var(--primary);
+      color: #fff;
+      border: none;
+      cursor: pointer;
+      font-weight: 700;
+    }
+
+    button:hover {
+      background: #0a58ca;
+    }
+
+    .loading {
+      position: relative;
+      pointer-events: none;
+      opacity: 0.9;
+    }
+
+    .spinner {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(255, 255, 255, 0.6);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-right: 6px;
+      vertical-align: middle;
+    }
+
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+
+    #paradas {
+      margin: 6px 0 0;
+      padding: 8px;
+      background: #f9fafb;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      min-height: 32px;
+      font-size: 14px;
+      line-height: 1.4;
+    }
+
+    /* Estilo para tooltip al pasar el ratón sobre el marcador */
+    .leaflet-tooltip.marker-label {
+      background: rgba(0,0,0,0.75) !important;
+      border: 0 !important;
+      box-shadow: none !important;
+      color: #fff !important;
+      font-weight: 700 !important;
+      font-size: 12px !important;
+      text-align: center !important;
+      padding: 4px 6px !important;
+      border-radius: 4px !important;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="info">
+    <h1>Ruta óptima</h1>
+    <div id="controls">
+      <select id="select-inicio">
+        <option value="">Selecciona inicio</option>
+      </select>
+      <select id="select-fin">
+        <option value="">Selecciona fin</option>
+      </select>
+      <button id="buscar">Buscar ruta</button>
+    </div>
+    <div class="row"><span class="label">Inicio:</span> <span id="inicio">Selecciona un punto</span></div>
+    <div class="row"><span class="label">Fin:</span> <span id="fin">Selecciona un punto</span></div>
+    <div class="row"><span class="label">Ruta:</span></div>
+    <div id="route-list" class="muted">Elige inicio y fin y pulsa Buscar.</div>
+    <div class="row"><span class="label">Distancia total:</span> <span id="distancia">-</span></div>
+    <div class="row"><span class="label">Tiempo estimado:</span> <span id="tiempo">-</span></div>
+    <div class="row"><span class="label">Lugares del camino:</span></div>
+    <div id="paradas" class="muted">Se mostrarán las paradas en orden.</div>
+    <div class="muted">Selecciona inicio y fin desde el mapa o las listas y pulsa "Buscar ruta". Un tercer clic en el mapa reinicia y toma ese punto como nuevo inicio.</div>
+  </div>
+
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+  ></script>
+  <script>
+    document.addEventListener("DOMContentLoaded", () => {
+      // Datos GeoJSON entregados (orden [longitud, latitud]).
+      const lugaresGeoJson = {
+        "type": "FeatureCollection",
+        "features": [
+          {
+            "type": "Feature",
+            "properties": { "id": "A", "nombre": "A" },
+            "geometry": { "type": "Point", "coordinates": [ -74.034523, 4.860879 ] }
+          },
+          {
+            "type": "Feature",
+            "properties": { "id": "B", "nombre": "B" },
+            "geometry": { "type": "Point", "coordinates": [ -74.03411584810641, 4.860750946323784 ] }
+          },
+          {
+            "type": "Feature",
+            "properties": { "id": "C", "nombre": "C" },
+            "geometry": { "type": "Point", "coordinates": [ -74.03465101425971, 4.8605435195608075 ] }
+          },
+          {
+            "type": "Feature",
+            "properties": { "id": "D", "nombre": "D" },
+            "geometry": { "type": "Point", "coordinates": [ -74.03283204680149, 4.8611934810212505 ] }
+          },
+          {
+            "type": "Feature",
+            "properties": { "id": "E", "nombre": "E" },
+            "geometry": { "type": "Point", "coordinates": [ -74.0314018825077, 4.860660199979123 ] }
+          },
+          {
+            "type": "Feature",
+            "properties": { "id": "F", "nombre": "F" },
+            "geometry": { "type": "Point", "coordinates": [ -74.03298608916464, 4.8596221634573915 ] }
+          },
+          {
+            "type": "Feature",
+            "properties": { "id": "H", "nombre": "H" },
+            "geometry": { "type": "Point", "coordinates": [ -74.03298130746265, 4.860177971047838 ] }
+          },
+          {
+            "type": "Feature",
+            "properties": { "id": "Facultad", "nombre": "Facultad de Ingeniería" },
+            "geometry": { "type": "Point", "coordinates": [ -74.03433114556371, 4.861266309925839 ] }
+          },
+          {
+            "type": "Feature",
+            "properties": { "id": "PlantaProfes", "nombre": "Planta de Profesores de Ingeniería" },
+            "geometry": { "type": "Point", "coordinates": [ -74.03477713789468, 4.861288703511947 ] }
+          },
+          {
+            "type": "Feature",
+            "properties": { "id": "Agora", "nombre": "Edificio Ágora" },
+            "geometry": { "type": "Point", "coordinates": [ -74.03527534394945, 4.8610603573717 ] }
+          },
+          {
+            "type": "Feature",
+            "properties": { "id": "Kioscos", "nombre": "Kioscos" },
+            "geometry": { "type": "Point", "coordinates": [ -74.03516249576786, 4.861209650470453 ] }
+          },
+          {
+            "type": "Feature",
+            "properties": { "id": "PuntoVerde", "nombre": "Punto Verde" },
+            "geometry": { "type": "Point", "coordinates": [ -74.03325079426895, 4.860696843640228 ] }
+          },
+          {
+            "type": "Feature",
+            "properties": { "id": "O", "nombre": "Edificio O" },
+            "geometry": { "type": "Point", "coordinates": [ -74.03291943983682, 4.860804853145883 ] }
+          },
+          {
+            "type": "Feature",
+            "properties": { "id": "Capilla", "nombre": "Capilla" },
+            "geometry": { "type": "Point", "coordinates": [ -74.03290721188544, 4.861749573544513 ] }
+          },
+          {
+            "type": "Feature",
+            "properties": { "id": "PuenteGris", "nombre": "Puente Gris" },
+            "geometry": { "type": "Point", "coordinates": [ -74.03386309381061, 4.861463049962811 ] }
+          },
+          {
+            "type": "Feature",
+            "properties": { "id": "K", "nombre": "Edificio K" },
+            "geometry": { "type": "Point", "coordinates": [ -74.03385760483197, 4.862150718293345 ] }
+          },
+          {
+            "type": "Feature",
+            "properties": { "id": "AdPortas", "nombre": "Ad Portas" },
+            "geometry": { "type": "Point", "coordinates": [ -74.03371582052661, 4.862641121631078 ] }
+          },
+          {
+            "type": "Feature",
+            "properties": { "id": "LivinLab", "nombre": "Terraza Livin Lab" },
+            "geometry": { "type": "Point", "coordinates": [ -74.03216019807624, 4.862461845660142 ] }
+          },
+          {
+            "type": "Feature",
+            "properties": { "id": "PuenteRojo", "nombre": "Puente Rojo" },
+            "geometry": { "type": "Point", "coordinates": [ -74.03247503501981, 4.861966722505657 ] }
+          },
+          {
+            "type": "Feature",
+            "properties": { "id": "Biblioteca", "nombre": "Biblioteca" },
+            "geometry": { "type": "Point", "coordinates": [ -74.032088726556, 4.861106127258737 ] }
+          },
+          {
+            "type": "Feature",
+            "properties": { "id": "G", "nombre": "Edificio G" },
+            "geometry": { "type": "Point", "coordinates": [ -74.03173842751464, 4.861685970595037 ] }
+          },
+          {
+            "type": "Feature",
+            "properties": { "id": "Embarcadero", "nombre": "Embarcadero" },
+            "geometry": { "type": "Point", "coordinates": [ -74.03147950621923, 4.861025866085889 ] }
+          },
+          {
+            "type": "Feature",
+            "properties": { "id": "Meson", "nombre": "Meson" },
+            "geometry": { "type": "Point", "coordinates": [ -74.03350543565267, 4.858621432016863 ] }
+          },
+          {
+            "type": "Feature",
+            "properties": { "id": "CAF", "nombre": "CAF" },
+            "geometry": { "type": "Point", "coordinates": [ -74.03302604779809, 4.858984282665671 ] }
+          },
+          {
+            "type": "Feature",
+            "properties": { "id": "Atelier", "nombre": "Atelier" },
+            "geometry": { "type": "Point", "coordinates": [ -74.0326840661577, 4.859647079607866 ] }
+          },
+          {
+            "type": "Feature",
+            "properties": { "id": "Clinica", "nombre": "Clínica de la Sabana" },
+            "geometry": { "type": "Point", "coordinates": [ -74.03053164009711, 4.856352439822578 ] }
+          },
+          {
+            "type": "Feature",
+            "properties": { "id": "ArenaSabana", "nombre": "Arena Sabana" },
+            "geometry": { "type": "Point", "coordinates": [ -74.02795204102766, 4.854637998243644 ] }
+          },
+          {
+            "type": "Feature",
+            "properties": { "id": "EstacionTren", "nombre": "Estación del Tren" },
+            "geometry": { "type": "Point", "coordinates": [ -74.02717443170918, 4.854199563509895 ] }
+          },
+          {
+            "type": "Feature",
+            "properties": { "id": "FabLab", "nombre": "Fab Lab" },
+            "geometry": { "type": "Point", "coordinates": [ -74.02625543321521, 4.853670354009806 ] }
+          },
+          {
+            "type": "Feature",
+            "properties": { "id": "Tablitas", "nombre": "Tablitas" },
+            "geometry": { "type": "Point", "coordinates": [ -74.02675551851752, 4.855715169074056 ] }
+          },
+          {
+            "type": "Feature",
+            "properties": { "id": "PuntoPizza", "nombre": "Punto Pizza" },
+            "geometry": { "type": "Point", "coordinates": [ -74.03474503805849, 4.8606218584487975 ] }
+          },
+          {
+            "type": "Feature",
+            "properties": { "id": "PortonCafe", "nombre": "Portón Café" },
+            "geometry": { "type": "Point", "coordinates": [ -74.03753628042706, 4.863513597345472 ] }
+          },
+          {
+            "type": "Feature",
+            "properties": { "id": "EntradaAdportas", "nombre": "Entrada a Adportas" },
+            "geometry": { "type": "Point", "coordinates": [ -74.03181268240414, 4.863091474568248 ] }
+          },
+          {
+            "type": "Feature",
+            "properties": { "id": "CentroChia", "nombre": "Centro Chía" },
+            "geometry": { "type": "Point", "coordinates": [ -74.0374611942994, 4.865299522866258 ] }
+          },
+          {
+            "type": "Feature",
+            "properties": { "id": "PuntoSandwich", "nombre": "Punto Sandwich" },
+            "geometry": { "type": "Point", "coordinates": [ -74.03365303474939, 4.860704354646872 ] }
+          }
+        ]
+      };
+
+      // Distancias del grafo entregadas (no se calculan a partir de coordenadas).
+      const distancias = [
+        ["A","C",53.46],
+        ["A","Facultad de Ingeniería",37.49],
+        ["Facultad de Ingeniería","Planta de Profesores de Ingeniería",52.51],
+        ["A","Edificio Ágora",93.27],
+        ["Edificio Ágora","Kioscos",19.70],
+        ["C","Kioscos",112.71],
+        ["Planta de Profesores de Ingeniería","Kioscos",101.98],
+        ["C","B",62.44],
+        ["A","B",66.92],
+        ["Facultad de Ingeniería","B",87.74],
+        ["B","Punto Verde",115.20],
+        ["Facultad de Ingeniería","Punto Verde",174.41],
+        ["Punto Verde","Edificio O",36.99],
+        ["Edificio O","D",58.26],
+        ["D","Capilla",72.87],
+        ["Facultad de Ingeniería","Puente Gris",65.24],
+        ["Puente Gris","Capilla",112.60],
+        ["Puente Gris","Edificio K",106.94],
+        ["Edificio K","Ad Portas",63.58],
+        ["Ad Portas","Terraza Livin Lab",170.68],
+        ["Terraza Livin Lab","Puente Rojo",57.67],
+        ["Puente Rojo","Capilla",91.54],
+        ["Capilla","Biblioteca",132.06],
+        ["Puente Rojo","Biblioteca",123.43],
+        ["Edificio O","Biblioteca",92.13],
+        ["D","Biblioteca",96.62],
+        ["Terraza Livin Lab","Edificio G",99.41],
+        ["Puente Rojo","Edificio G",100.99],
+        ["Edificio G","Embarcadero",100.43],
+        ["Biblioteca","Embarcadero",241.89],
+        ["Edificio O","Embarcadero",237.76],
+        ["D","Embarcadero",252.81],
+        ["Embarcadero","E",73.46],
+        ["Biblioteca","E",259.91],
+        ["Edificio O","E",243.85],
+        ["D","E",266.02],
+        ["B","H",162.73],
+        ["Punto Verde","H",94.18],
+        ["Embarcadero","H",199.13],
+        ["E","H",212.80],
+        ["Biblioteca","H",164.85],
+        ["H","F",58.03],
+        ["F","Atelier",28.98],
+        ["E","Atelier",214.89],
+        ["Atelier","CAF",87.02],
+        ["Atelier","Meson",151.56],
+        ["Meson","Clínica de la Sabana",564.67],
+        ["E","Clínica de la Sabana",626.86],
+        ["Atelier","Clínica de la Sabana",466.42],
+        ["CAF","Clínica de la Sabana",493.33],
+        ["Clínica de la Sabana","Arena Sabana",545.21],
+        ["Arena Sabana","Estación del Tren",96.23],
+        ["Estación del Tren","Fab Lab",116.93],
+        ["Clínica de la Sabana","Tablitas",499.77],
+        ["Estación del Tren","Tablitas",209.87],
+        ["C","Punto Pizza",19.97],
+        ["A","Punto Pizza",45.19],
+        ["Edificio Ágora","Punto Pizza",91.01],
+        ["Kioscos","Punto Pizza",82.95],
+        ["Centro Chía","Portón Café",254.64],
+        ["Portón Café","Edificio K",537.57],
+        ["Portón Café","Ad Portas",560.78],
+        ["Entrada a Adportas","Ad Portas",212.05],
+        ["Entrada a Adportas","Terraza Livin Lab",92.77],
+        ["B","Punto Sandwich",73.20],
+        ["Facultad de Ingeniería","Punto Sandwich",110.89],
+        ["Punto Sandwich","Punto Verde",53.62],
+        ["B","Capilla",192.19],
+        ["B","Puente Gris",117.64],
+        ["Punto Sandwich","Puente Gris",92.53],
+        ["Punto Sandwich","Capilla",181.42],
+        ["Punto Sandwich","H",112.18]
+      ];
+
+      const markerStyles = {
+        default: { radius: 8, color: "#0d6efd", weight: 2, fillColor: "#0d6efd", fillOpacity: 0.7 },
+        start: { radius: 10, color: "#1b4332", weight: 2, fillColor: "#2ecc71", fillOpacity: 0.9 },
+        end: { radius: 10, color: "#641220", weight: 2, fillColor: "#e74c3c", fillOpacity: 0.9 }
+      };
+
+      // Elementos del DOM.
+      const inicioEl = document.getElementById("inicio");
+      const finEl = document.getElementById("fin");
+      const rutaEl = document.getElementById("route-list");
+      const distanciaEl = document.getElementById("distancia");
+      const tiempoEl = document.getElementById("tiempo");
+      const selectInicio = document.getElementById("select-inicio");
+      const selectFin = document.getElementById("select-fin");
+      const buscarBtn = document.getElementById("buscar");
+      const paradasEl = document.getElementById("paradas");
+
+      // Llena las listas desplegables con todos los lugares disponibles.
+      function poblarSelects() {
+        const opciones = lugaresGeoJson.features
+          .map(f => f.properties.nombre)
+          .sort((a, b) => a.localeCompare(b));
+
+        opciones.forEach(nombre => {
+          const optInicio = document.createElement("option");
+          optInicio.value = nombre;
+          optInicio.textContent = nombre;
+          selectInicio.appendChild(optInicio);
+
+          const optFin = document.createElement("option");
+          optFin.value = nombre;
+          optFin.textContent = nombre;
+          selectFin.appendChild(optFin);
+        });
+      }
+
+      poblarSelects();
+
+      // Comprobamos si Leaflet está disponible; si no, seguimos con un fallback.
+      const leafletAvailable = !!window.L;
+      if (!leafletAvailable) {
+        rutaEl.textContent = "No se pudo cargar el mapa (Leaflet). La funcionalidad de búsqueda seguirá disponible.";
+        rutaEl.classList.remove("muted");
+      }
+
+      // --- Crear el mapa y la capa base (solo si Leaflet está disponible) ---
+      let map = null;
+      if (leafletAvailable) {
+        map = L.map("map");
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          attribution: "&copy; OpenStreetMap contributors"
+        }).addTo(map);
+      }
+
+      // Almacenes auxiliares.
+      const markers = new Map(); // nombre -> marker-like object
+      const coordsByName = new Map(); // nombre -> [lat, lng]
+
+      // --- Cargar los puntos GeoJSON y hacerlos clickeables ---
+      if (leafletAvailable) {
+        const geoLayer = L.geoJSON(lugaresGeoJson, {
+          pointToLayer: (feature, latlng) => {
+            const marker = L.circleMarker(latlng, markerStyles.default);
+            // Popup al hacer click
+            marker.bindPopup(feature.properties.nombre);
+            // Tooltip que aparece al pasar el ratón (hover). Si prefieres que el nombre esté
+            // siempre visible dentro del círculo, cambia `permanent: false` a `permanent: true`.
+            marker.bindTooltip(feature.properties.nombre, { permanent: false, direction: 'top', className: 'marker-label' });
+            marker.on("click", () => handlePointClick(feature.properties.nombre));
+            markers.set(feature.properties.nombre, marker);
+            coordsByName.set(feature.properties.nombre, [latlng.lat, latlng.lng]);
+            return marker;
+          }
+        }).addTo(map);
+
+        // Ajustar la vista para cubrir todos los puntos.
+        map.fitBounds(geoLayer.getBounds(), { padding: [30, 30] });
+      } else {
+        // Fallback: poblamos coordenadas y creamos "marcadores" mínimos para evitar errores.
+        lugaresGeoJson.features.forEach(f => {
+          const lon = f.geometry.coordinates[0];
+          const lat = f.geometry.coordinates[1];
+          coordsByName.set(f.properties.nombre, [lat, lon]);
+          markers.set(f.properties.nombre, { setStyle: () => {}, on: () => {}, bindPopup: () => {} });
+        });
+      }
+
+      // --- Construir grafo no dirigido usando solo las distancias dadas ---
+      const grafo = new Map();
+      lugaresGeoJson.features.forEach(f => {
+        grafo.set(f.properties.nombre, []);
+      });
+      distancias.forEach(([origen, destino, distancia]) => {
+        if (!grafo.has(origen)) grafo.set(origen, []);
+        if (!grafo.has(destino)) grafo.set(destino, []);
+        grafo.get(origen).push({ nodo: destino, peso: distancia });
+        grafo.get(destino).push({ nodo: origen, peso: distancia });
+      });
+
+      // --- Implementación simple de Dijkstra para obtener el camino más corto ---
+      function dijkstra(grafo, inicio, fin) {
+        const dist = new Map();
+        const previo = new Map();
+        const visitado = new Set();
+
+        grafo.forEach((_, nodo) => dist.set(nodo, Infinity));
+        dist.set(inicio, 0);
+
+        const cola = [[0, inicio]]; // [distancia, nodo]
+
+        while (cola.length) {
+          cola.sort((a, b) => a[0] - b[0]); // prioridad por menor distancia
+          const [dActual, nodo] = cola.shift();
+          if (visitado.has(nodo)) continue;
+          visitado.add(nodo);
+          if (nodo === fin) break;
+
+          const vecinos = grafo.get(nodo) || [];
+          vecinos.forEach(({ nodo: vecino, peso }) => {
+            const nuevaDist = dActual + peso;
+            if (nuevaDist < dist.get(vecino)) {
+              dist.set(vecino, nuevaDist);
+              previo.set(vecino, nodo);
+              cola.push([nuevaDist, vecino]);
+            }
+          });
+        }
+
+        if (dist.get(fin) === Infinity) {
+          return { distancia: Infinity, camino: [] };
+        }
+
+        const camino = [];
+        let actual = fin;
+        while (actual !== undefined) {
+          camino.unshift(actual);
+          actual = previo.get(actual);
+        }
+
+        return { distancia: dist.get(fin), camino };
+      }
+
+      // --- Manejo de interacción y actualización visual ---
+      let inicio = null;
+      let fin = null;
+      let rutaPolyline = null;
+
+      function resetMarkerStyles() {
+        markers.forEach(marker => marker.setStyle(markerStyles.default));
+      }
+
+      function limpiarRuta() {
+        if (!leafletAvailable) {
+          rutaPolyline = null;
+          return;
+        }
+        if (rutaPolyline && map) {
+          map.removeLayer(rutaPolyline);
+          rutaPolyline = null;
+        }
+      }
+
+      function actualizarInfo(camino = [], distancia = null) {
+        inicioEl.textContent = inicio || "Selecciona un punto";
+        finEl.textContent = fin || "Selecciona un punto";
+
+        if (camino.length > 0) {
+          rutaEl.textContent = camino.join(" \u2192 ");
+          rutaEl.classList.remove("muted");
+          paradasEl.innerHTML = camino.map((p, idx) => `${idx + 1}. ${p}`).join("<br>");
+          paradasEl.classList.remove("muted");
+        } else {
+          rutaEl.textContent = "Elige inicio y fin y pulsa Buscar.";
+          rutaEl.classList.add("muted");
+          paradasEl.textContent = "Se mostrarán las paradas en orden.";
+          paradasEl.classList.add("muted");
+        }
+
+        if (distancia !== null && distancia !== Infinity && camino.length > 0) {
+          distanciaEl.textContent = `${distancia.toFixed(2)} m`;
+          const minutos = (distancia / 1000) / 5 * 60;
+          const minutosRedondeados = Math.round(minutos * 10) / 10;
+          tiempoEl.textContent = `Aproximadamente ${minutosRedondeados} minutos caminando`;
+        } else {
+          distanciaEl.textContent = "-";
+          tiempoEl.textContent = "-";
+        }
+      }
+
+      function dibujarRuta(camino) {
+        limpiarRuta();
+        if (camino.length < 2) return;
+        const latlngs = camino
+          .map(nombre => coordsByName.get(nombre))
+          .filter(Boolean);
+        if (!leafletAvailable) {
+          // No hay mapa: no dibujamos la polilínea, solo actualizamos texto en el panel.
+          return;
+        }
+        rutaPolyline = L.polyline(latlngs, {
+          color: markerStyles.end.fillColor,
+          weight: 6,
+          opacity: 0.9
+        }).addTo(map);
+        map.fitBounds(rutaPolyline.getBounds(), { padding: [50, 50] });
+      }
+
+      function actualizarSelects() {
+        selectInicio.value = inicio || "";
+        selectFin.value = fin || "";
+      }
+
+      function actualizarMarcadores() {
+        resetMarkerStyles();
+        if (inicio) markers.get(inicio)?.setStyle(markerStyles.start);
+        if (fin) markers.get(fin)?.setStyle(markerStyles.end);
+      }
+
+      function establecerInicio(nombre) {
+        inicio = nombre || null;
+        limpiarRuta();
+        actualizarMarcadores();
+        actualizarSelects();
+        actualizarInfo();
+      }
+
+      function establecerFin(nombre) {
+        fin = nombre || null;
+        limpiarRuta();
+        actualizarMarcadores();
+        actualizarSelects();
+        actualizarInfo();
+      }
+
+      function calcularRuta() {
+        setLoading(true);
+        if (!inicio || !fin) {
+          rutaEl.textContent = "Selecciona inicio y fin antes de buscar.";
+          rutaEl.classList.remove("muted");
+          limpiarRuta();
+          actualizarInfo([], null);
+          return setLoading(false);
+        }
+        if (inicio === fin) {
+          rutaEl.textContent = "Inicio y fin deben ser diferentes.";
+          rutaEl.classList.remove("muted");
+          limpiarRuta();
+          actualizarInfo([], null);
+          return setLoading(false);
+        }
+
+        const resultado = dijkstra(grafo, inicio, fin);
+        if (resultado.camino.length === 0) {
+          rutaEl.textContent = "No hay ruta entre estos puntos en el grafo.";
+          rutaEl.classList.remove("muted");
+          limpiarRuta();
+          actualizarInfo([], null);
+          return setLoading(false);
+        }
+        dibujarRuta(resultado.camino);
+        actualizarInfo(resultado.camino, resultado.distancia);
+        setLoading(false);
+      }
+
+      // Maneja clics en el mapa: primera selección = inicio, segunda = fin, tercera reinicia.
+      function handlePointClick(nombre) {
+        if (!inicio) {
+          inicio = nombre;
+          fin = null;
+          limpiarRuta();
+          actualizarMarcadores();
+          actualizarSelects();
+          actualizarInfo();
+          return;
+        }
+
+        if (inicio && !fin) {
+          if (nombre === inicio) return; // evitar mismo punto como fin
+          fin = nombre;
+          limpiarRuta();
+          actualizarMarcadores();
+          actualizarSelects();
+          actualizarInfo();
+          return;
+        }
+
+        if (inicio && fin) {
+          inicio = nombre;
+          fin = null;
+          limpiarRuta();
+          actualizarMarcadores();
+          actualizarSelects();
+          actualizarInfo();
+        }
+      }
+
+      // Listeners para selects y botón buscar.
+      selectInicio.addEventListener("change", (e) => {
+        establecerInicio(e.target.value || null);
+      });
+
+      selectFin.addEventListener("change", (e) => {
+        establecerFin(e.target.value || null);
+      });
+
+      buscarBtn.addEventListener("click", calcularRuta);
+
+      // Inicializa el panel en estado vacío.
+      actualizarInfo();
+
+      function setLoading(isLoading) {
+        if (isLoading) {
+          buscarBtn.classList.add("loading");
+          buscarBtn.disabled = true;
+          buscarBtn.innerHTML = '<span class="spinner"></span>Buscando...';
+        } else {
+          buscarBtn.classList.remove("loading");
+          buscarBtn.disabled = false;
+          buscarBtn.textContent = "Buscar ruta";
+        }
+      }
+    });
+  </script>
+</body>
+</html>
